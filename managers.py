@@ -53,7 +53,24 @@ class LlamaCppManager:
             return returncode == 0
         except FileNotFoundError:
             return False
-    
+
+    @staticmethod
+    def has_vulkan() -> bool:
+        """Check if Vulkan is available (GPU with Vulkan support)."""
+        try:
+            if shutil.which("vulkaninfo"):
+                proc = subprocess.run(
+                    ["vulkaninfo", "--summary"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if proc.returncode == 0 and "GPU" in proc.stdout:
+                    return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return False
+
     @staticmethod
     async def clone_repo():
         if LlamaCppManager.is_installed():
@@ -78,7 +95,7 @@ class LlamaCppManager:
 
     @staticmethod
     async def build():
-        """Build llama.cpp using CMake with optional CUDA support."""
+        """Build llama.cpp using CMake with optional CUDA or Vulkan support."""
         logger.info("Building llama.cpp...")
         system = platform.system()
         
@@ -97,11 +114,18 @@ class LlamaCppManager:
         
         # Check for CUDA support
         has_cuda = await LlamaCppManager.has_nvidia_gpu()
+        has_vulkan = LlamaCppManager.has_vulkan()
+
+        backend = "CPU"
         if has_cuda:
+            backend = "CUDA"
             logger.info("NVIDIA GPU detected, building with CUDA support...")
+        elif has_vulkan:
+            backend = "Vulkan"
+            logger.info("Vulkan GPU detected, building with Vulkan support...")
         else:
-            logger.info("No NVIDIA GPU detected, building CPU-only version...")
-        
+            logger.info("No GPU detected, building CPU-only version...")
+
         build_dir = LLAMA_CPP_DIR / "build"
         build_dir.mkdir(exist_ok=True)
         
@@ -112,15 +136,15 @@ class LlamaCppManager:
                 "-DLLAMA_CURL=OFF",
                 "-DCMAKE_BUILD_TYPE=Release"
             ]
-            
-            # Add CUDA flag if available
+
             if has_cuda:
                 cmake_args.append("-DGGML_CUDA=ON")
-            
-            # Windows-specific: use Release config
+            elif has_vulkan:
+                cmake_args.append("-DGGML_VULKAN=ON")
+
             if system == "Windows":
                 cmake_args.extend(["-A", "x64"])
-            
+
             logger.info(f"Running CMake configure: {' '.join(cmake_args)}")
             
             proc = await asyncio.create_subprocess_exec(
@@ -163,17 +187,17 @@ class LlamaCppManager:
                 error_output = stdout.decode() if stdout else "No output"
                 logger.error(f"CMake build failed:\n{error_output}")
                 raise Exception(f"CMake build failed. Output:\n{error_output[:2000]}")
-            
-            cuda_status = "with CUDA" if has_cuda else "CPU-only"
-            logger.info(f"Build successful ({cuda_status}) on {system}")
-            
+
+            logger.info(f"Build successful ({backend}) on {system}")
+
         except Exception as e:
             logger.error(f"Build failed: {e}")
             raise Exception(
                 f"Failed to build llama.cpp: {str(e)}\n"
                 "Ensure build tools are installed:\n"
                 "  - Windows: Visual Studio Build Tools + CMake\n"
-                "  - Linux: build-essential, cmake, (nvidia-cuda-toolkit for GPU)"
+                "  - Linux: build-essential, cmake\n"
+                "  - For GPU: nvidia-cuda-toolkit (CUDA) or Vulkan SDK (Vulkan)"
             )
 
     @staticmethod
