@@ -3,6 +3,9 @@ Model conversion workflow for GGUF Forge.
 """
 import os
 import sys
+# Enable Xet high performance mode for faster downloads/uploads
+os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
+import hf_xet
 import json
 import shutil
 import asyncio
