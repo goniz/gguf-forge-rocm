@@ -297,7 +297,7 @@
     /* System Metrics Widget */
     .metrics-widget {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        grid-template-columns: repeat(7, 1fr);
         gap: 0.75rem;
         margin-bottom: 2rem;
     }
@@ -359,6 +359,14 @@
     <div class="metric-card">
         <div class="metric-value" id="metric-disk-write">-- MB/s</div>
         <div class="metric-label">Disk Write</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value" id="metric-net-rx">-- MB/s</div>
+        <div class="metric-label">Network RX</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value" id="metric-net-tx">-- MB/s</div>
+        <div class="metric-label">Network TX</div>
     </div>
 </div>
 {% endif %}
@@ -1593,6 +1601,8 @@
         document.getElementById('metric-disk-free').textContent = metrics.disk_free_gb + ' GB';
         document.getElementById('metric-disk-read').textContent = metrics.disk_read_mbps.toFixed(1) + ' MB/s';
         document.getElementById('metric-disk-write').textContent = metrics.disk_write_mbps.toFixed(1) + ' MB/s';
+        document.getElementById('metric-net-rx').textContent = metrics.net_rx_mbps.toFixed(1) + ' MB/s';
+        document.getElementById('metric-net-tx').textContent = metrics.net_tx_mbps.toFixed(1) + ' MB/s';
     }
 
     // ====== TICKET MODAL SYSTEM ======
