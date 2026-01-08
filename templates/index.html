@@ -293,10 +293,75 @@
             padding: 0.6rem 0.8rem !important;
         }
     }
+
+    /* System Metrics Widget */
+    .metrics-widget {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 0.75rem;
+        margin-bottom: 2rem;
+    }
+
+    .metric-card {
+        text-align: center;
+        padding: 0.75rem 0.5rem;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+    }
+
+    .metric-value {
+        font-size: 1.25rem;
+        font-weight: 600;
+        font-family: 'SF Mono', Monaco, Consolas, monospace;
+        margin-bottom: 0.25rem;
+    }
+
+    .metric-label {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    @media (max-width: 600px) {
+        .metrics-widget {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+
+    @media (max-width: 400px) {
+        .metrics-widget {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
 </style>
 {% endblock %}
 
 {% block content %}
+{% if role == 'admin' %}
+<div id="metrics-widget" class="metrics-widget" style="display: none;">
+    <div class="metric-card">
+        <div class="metric-value" id="metric-cpu">--%</div>
+        <div class="metric-label">CPU</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value" id="metric-memory">--%</div>
+        <div class="metric-label">Memory</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value" id="metric-disk-free">-- GB</div>
+        <div class="metric-label">Disk Free</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value" id="metric-disk-read">-- MB/s</div>
+        <div class="metric-label">Disk Read</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value" id="metric-disk-write">-- MB/s</div>
+        <div class="metric-label">Disk Write</div>
+    </div>
+</div>
+{% endif %}
 <div class="dashboard-container" style="max-width: 800px; margin: 0 auto; padding-top: 2rem;">
 
     {% if role == 'admin' %}
@@ -1517,6 +1582,19 @@
         });
     }
 
+    function renderSystemMetrics(metrics) {
+        const widget = document.getElementById('metrics-widget');
+        if (!widget) return;
+
+        widget.style.display = 'grid';
+
+        document.getElementById('metric-cpu').textContent = metrics.cpu_percent.toFixed(1) + '%';
+        document.getElementById('metric-memory').textContent = metrics.memory_percent.toFixed(1) + '%';
+        document.getElementById('metric-disk-free').textContent = metrics.disk_free_gb + ' GB';
+        document.getElementById('metric-disk-read').textContent = metrics.disk_read_mbps.toFixed(1) + ' MB/s';
+        document.getElementById('metric-disk-write').textContent = metrics.disk_write_mbps.toFixed(1) + ' MB/s';
+    }
+
     // ====== TICKET MODAL SYSTEM ======
     let currentTicketId = null;
 
@@ -1704,7 +1782,10 @@
     function connectWebSocket() {
         // Determine WebSocket URL (ws:// or wss://)
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws?channel=models&channel=requests&channel=tickets&channel=my_requests`;
+        let wsUrl = `${protocol}//${window.location.host}/ws?channel=models&channel=requests&channel=tickets&channel=my_requests`;
+        if (isAdmin) {
+            wsUrl += '&channel=system';
+        }
 
         ws = new WebSocket(wsUrl);
 
@@ -1791,6 +1872,12 @@
             case 'my_requests_update':
                 // User's requests changed - still needs HTTP fetch (user-specific)
                 fetchMyRequests();
+                break;
+            case 'system_metrics':
+                // System metrics update - render directly
+                if (isAdmin) {
+                    renderSystemMetrics(data.metrics);
+                }
                 break;
             case 'pong':
                 // Ping response - connection is alive

@@ -1,6 +1,7 @@
 """
 WebSocket manager for real-time updates in GGUF Forge.
 """
+
 import json
 import asyncio
 import logging
@@ -20,18 +21,19 @@ def json_serializer(obj):
 
 class ConnectionManager:
     """Manages WebSocket connections and broadcasts updates to connected clients."""
-    
+
     def __init__(self):
         # Active connections by channel
         self.active_connections: Dict[str, Set[WebSocket]] = {
-            "models": set(),      # Model conversion status updates
-            "requests": set(),    # Request updates (admin)
-            "tickets": set(),     # Ticket updates
-            "my_requests": set(), # User's own requests
+            "models": set(),  # Model conversion status updates
+            "requests": set(),  # Request updates (admin)
+            "tickets": set(),  # Ticket updates
+            "my_requests": set(),  # User's own requests
+            "system": set(),  # System metrics updates (admin)
         }
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
-    
+
     async def connect(self, websocket: WebSocket, channels: list = None):
         """Accept connection and add to specified channels."""
         await websocket.accept()
@@ -42,41 +44,43 @@ class ConnectionManager:
                 if channel in self.active_connections:
                     self.active_connections[channel].add(websocket)
         logger.debug(f"WebSocket connected to channels: {channels}")
-    
+
     async def disconnect(self, websocket: WebSocket):
         """Remove connection from all channels."""
         async with self._lock:
             for channel in self.active_connections.values():
                 channel.discard(websocket)
-    
+
     async def broadcast(self, channel: str, data: Any):
         """Broadcast message to all connections in a channel."""
         if channel not in self.active_connections:
             return
-        
-        message = json.dumps({"channel": channel, "data": data}, default=json_serializer)
+
+        message = json.dumps(
+            {"channel": channel, "data": data}, default=json_serializer
+        )
         dead_connections = set()
-        
+
         async with self._lock:
             connections = self.active_connections[channel].copy()
-        
+
         for connection in connections:
             try:
                 await connection.send_text(message)
             except Exception:
                 dead_connections.add(connection)
-        
+
         # Clean up dead connections
         if dead_connections:
             async with self._lock:
                 for channel_set in self.active_connections.values():
                     channel_set -= dead_connections
-    
+
     async def broadcast_all(self, data: Any):
         """Broadcast to all channels (for general updates)."""
         for channel in self.active_connections.keys():
             await self.broadcast(channel, data)
-    
+
     def get_connection_count(self, channel: str = None) -> int:
         """Get number of active connections."""
         if channel:
@@ -90,45 +94,41 @@ manager = ConnectionManager()
 
 async def broadcast_model_update(model_data: dict):
     """Broadcast model status update to all connected clients."""
-    await manager.broadcast("models", {
-        "type": "model_update",
-        "model": model_data
-    })
+    await manager.broadcast("models", {"type": "model_update", "model": model_data})
 
 
 async def broadcast_models_list(models: list):
     """Broadcast full models list update."""
-    await manager.broadcast("models", {
-        "type": "models_list",
-        "models": models
-    })
+    await manager.broadcast("models", {"type": "models_list", "models": models})
 
 
 async def broadcast_requests_update():
     """Broadcast pending requests list to admin clients.
-    
+
     Sends actual data instead of just a signal to avoid HTTP refetch.
     """
     from database import get_db_connection
-    
+
     conn = await get_db_connection()
-    await conn.execute("SELECT * FROM requests WHERE status = 'pending' ORDER BY created_at DESC")
+    await conn.execute(
+        "SELECT * FROM requests WHERE status = 'pending' ORDER BY created_at DESC"
+    )
     requests = await conn.fetchall()
     await conn.close()
-    
-    await manager.broadcast("requests", {
-        "type": "requests_list",
-        "requests": [r.to_dict() for r in requests]
-    })
+
+    await manager.broadcast(
+        "requests",
+        {"type": "requests_list", "requests": [r.to_dict() for r in requests]},
+    )
 
 
 async def broadcast_tickets_update():
     """Broadcast open tickets list to admin clients.
-    
+
     Sends actual data instead of just a signal to avoid HTTP refetch.
     """
     from database import get_db_connection
-    
+
     conn = await get_db_connection()
     await conn.execute("""
         SELECT t.*, r.hf_repo_id, r.requested_by 
@@ -139,37 +139,42 @@ async def broadcast_tickets_update():
     """)
     tickets = await conn.fetchall()
     await conn.close()
-    
-    await manager.broadcast("tickets", {
-        "type": "tickets_list",
-        "tickets": [t.to_dict() for t in tickets]
-    })
+
+    await manager.broadcast(
+        "tickets", {"type": "tickets_list", "tickets": [t.to_dict() for t in tickets]}
+    )
 
 
 async def broadcast_my_requests_update():
     """Signal clients to refresh their own requests.
-    
+
     Note: This one still sends a signal because user-specific requests
     require knowing the current user context which isn't available here.
     """
-    await manager.broadcast("my_requests", {
-        "type": "my_requests_update"
-    })
+    await manager.broadcast("my_requests", {"type": "my_requests_update"})
 
 
 async def broadcast_transfer_progress(model_id: str, transfer_type: str, files: list):
     """
     Broadcast download/upload progress for a model.
-    
+
     Args:
         model_id: The model job ID
         transfer_type: 'download' or 'upload'
         files: List of dicts with file progress info:
                [{"name": "file.safetensors", "progress": 45, "speed": "12.5MB/s", "size": "5.00G"}]
     """
-    await manager.broadcast("models", {
-        "type": "transfer_progress",
-        "model_id": model_id,
-        "transfer_type": transfer_type,
-        "files": files
-    })
+    await manager.broadcast(
+        "models",
+        {
+            "type": "transfer_progress",
+            "model_id": model_id,
+            "transfer_type": transfer_type,
+            "files": files,
+        },
+    )
+
+
+async def broadcast_system_metrics(metrics: dict):
+    """Broadcast system metrics to admin clients."""
+    await manager.broadcast("system", {"type": "system_metrics", "metrics": metrics})
