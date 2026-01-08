@@ -73,7 +73,37 @@ class ModelWorkflow:
         self.new_repo_id = None
         self.hf_token = None
         self.api = None
+        # Pause support
+        self.paused = False
+        self.pause_event = asyncio.Event()
+        self.pause_event.set()  # Start unpaused
     
+    async def pause(self):
+        """Pause the workflow at the next checkpoint."""
+        if not self.paused:
+            self.paused = True
+            self.pause_event.clear()
+            await self.log("⏸ PAUSE REQUESTED - Workflow will pause at next checkpoint...")
+            await self._update_db(status="paused")
+
+    async def resume(self):
+        """Resume the workflow."""
+        if self.paused:
+            self.paused = False
+            self.pause_event.set()
+            await self.log("▶ RESUMED - Continuing workflow...")
+            # We don't update status here as the loop will pick up and set status back to running state
+            # or we can set it to "running" temporarily
+            await self._update_db(status="resuming")
+
+    async def wait_if_paused(self):
+        """Wait here if the workflow is paused."""
+        if self.paused:
+            await self.log("  ⏸ Job paused. Waiting for resume...")
+            await self.pause_event.wait()
+            # Check if we were resumed just to be terminated
+            self.check_terminated()
+
     async def terminate(self):
         """Request termination of this workflow."""
         self.terminated = True
@@ -280,6 +310,7 @@ class ModelWorkflow:
             
             # 1. Setup Llama
             self.check_terminated()
+            await self.wait_if_paused()
             self.start_step("setup")
             await self.log("▶ STEP 1: Setting up llama.cpp...")
             await self.log("  Checking llama.cpp installation...")
@@ -295,6 +326,7 @@ class ModelWorkflow:
 
             # 2. Download
             self.check_terminated()
+            await self.wait_if_paused()
             self.start_step("download")
             await self.status("downloading")
             await self.log("▶ STEP 2: Downloading model from HuggingFace...")
@@ -330,6 +362,7 @@ class ModelWorkflow:
                 total_files = len(download_files)
                 for idx, filename in enumerate(download_files):
                     self.check_terminated()
+                    await self.wait_if_paused()
                     short_name = filename.split('/')[-1] if '/' in filename else filename
                     
                     # Initialize progress for this file
@@ -381,6 +414,7 @@ class ModelWorkflow:
 
             # 3. Convert to FP16
             self.check_terminated()
+            await self.wait_if_paused()
             self.start_step("convert")
             await self.status("converting")
             await self.log("▶ STEP 3: Converting to GGUF format (FP16)...")
@@ -419,6 +453,7 @@ class ModelWorkflow:
 
             # 4. Quantize and Upload (each quant is uploaded immediately after creation, then deleted)
             self.check_terminated()
+            await self.wait_if_paused()
             self.start_step("quantize")
             await self.status("quantizing")
             await self.log("▶ STEP 4: Quantizing and uploading each format...")
@@ -476,6 +511,7 @@ class ModelWorkflow:
             # Process quants one at a time: quantize → upload → delete
             for idx, q_type in enumerate(quants_to_process):
                 self.check_terminated()
+                await self.wait_if_paused()
                 
                 overall_idx = self.quants_to_run.index(q_type) + 1
                 await self.log(f"  [{overall_idx}/{total_quants}] Processing {q_type}...")
@@ -519,6 +555,7 @@ class ModelWorkflow:
                     # === UPLOAD ===
                     if self.hf_token and self.new_repo_id:
                         self.check_terminated()
+                        await self.wait_if_paused()
                         
                         filename = f"{quant_base_name}.{q_type}.gguf"
                         file_size = q_path.stat().st_size if q_path.exists() else 0
@@ -584,6 +621,7 @@ class ModelWorkflow:
 
             # 5. Readme
             if self.hf_token and uploaded_files and self.new_repo_id:
+                await self.wait_if_paused()
                 await self.log("▶ STEP 5: Generating README...")
                 
                 # Get app version (async)

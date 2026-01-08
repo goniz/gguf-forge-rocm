@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
     conn = await get_db_connection()
     
     # Startup cleanup: Check for stuck 'processing' jobs from crashed server
-    processing_statuses = ['pending', 'initializing', 'downloading', 'converting', 'quantizing', 'uploading']
+    processing_statuses = ['pending', 'initializing', 'downloading', 'converting', 'quantizing', 'uploading', 'paused']
     await conn.execute(
         f"SELECT * FROM models WHERE status IN ({','.join(['?']*len(processing_statuses))})",
         tuple(processing_statuses)

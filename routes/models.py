@@ -128,9 +128,41 @@ async def terminate_model(model_id: str, user = Depends(get_admin)):
     
     # Terminate the running workflow
     workflow = running_workflows[model_id]
+    
+    # If paused, we need to resume it briefly so it can terminate
+    if workflow.paused:
+        await workflow.resume()
+        
     await workflow.terminate()
     
     return {"status": "terminating", "message": "Termination signal sent. Job will stop shortly."}
+
+
+@router.post("/models/{model_id}/pause")
+async def pause_model(model_id: str, user = Depends(get_admin)):
+    """Admin only: Pause a running job."""
+    if model_id not in running_workflows:
+        raise HTTPException(status_code=404, detail="Job not found or not running")
+    
+    workflow = running_workflows[model_id]
+    await workflow.pause()
+    
+    return {"status": "pausing", "message": "Pause signal sent. Job will pause at next checkpoint."}
+
+
+@router.post("/models/{model_id}/resume")
+async def resume_model(model_id: str, user = Depends(get_admin)):
+    """Admin only: Resume a paused job."""
+    if model_id not in running_workflows:
+        raise HTTPException(status_code=404, detail="Job not found in memory (try 'continue' if server restarted)")
+    
+    workflow = running_workflows[model_id]
+    if not workflow.paused:
+        raise HTTPException(status_code=400, detail="Job is not paused")
+        
+    await workflow.resume()
+    
+    return {"status": "resumed", "message": "Resume signal sent. Job continuing..."}
 
 
 @router.post("/models/{model_id}/continue")

@@ -386,6 +386,10 @@
             <div class="model-card-actions" style="display: flex; align-items: center; gap: 0.75rem;">
                 <span class="status-badge"
                     style="font-family: monospace; letter-spacing: 0.05em; font-size: 0.75rem;">Status</span>
+                <button class="resume-btn"
+                    style="display: none; background: var(--success); color: #000; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.7rem; font-weight: 500;">Resume</button>
+                <button class="pause-btn"
+                    style="display: none; background: transparent; color: #fbbf24; border: 1px solid #fbbf24; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.7rem;">Pause</button>
                 <button class="continue-btn"
                     style="display: none; background: var(--success); color: #000; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.7rem; font-weight: 500;">Continue</button>
                 <button class="terminate-btn"
@@ -676,7 +680,7 @@
             if (model.status === 'error') badge.style.color = 'var(--error)';
             else if (model.status === 'complete') badge.style.color = 'var(--success)';
             else if (model.status === 'terminated') badge.style.color = '#ff8c00';
-            else if (model.status === 'interrupted') badge.style.color = '#fbbf24';
+            else if (model.status === 'interrupted' || model.status === 'paused') badge.style.color = '#fbbf24';
             else badge.style.color = ''; // Default color
 
             // Progress
@@ -706,29 +710,47 @@
                 const deleteBtn = card.querySelector('.delete-btn');
                 const terminateBtn = card.querySelector('.terminate-btn');
                 const continueBtn = card.querySelector('.continue-btn');
+                const pauseBtn = card.querySelector('.pause-btn');
+                const resumeBtn = card.querySelector('.resume-btn');
 
                 // Update click handlers
                 deleteBtn.onclick = () => deleteModel(model.id, model.hf_repo_id);
                 terminateBtn.onclick = () => terminateModel(model.id, model.hf_repo_id);
                 continueBtn.onclick = () => continueModel(model.id, model.hf_repo_id);
+                pauseBtn.onclick = () => pauseModel(model.id, model.hf_repo_id);
+                resumeBtn.onclick = () => resumeModel(model.id, model.hf_repo_id);
 
                 // Show terminate for running jobs
-                const runningStatuses = ['pending', 'initializing', 'downloading', 'converting', 'quantizing', 'uploading'];
+                const runningStatuses = ['pending', 'initializing', 'downloading', 'converting', 'quantizing', 'uploading', 'resuming'];
                 if (runningStatuses.includes(model.status)) {
                     terminateBtn.style.display = 'inline-block';
+                    pauseBtn.style.display = 'inline-block';
+                    resumeBtn.style.display = 'none';
+                    deleteBtn.style.display = 'none';
+                    continueBtn.style.display = 'none';
+                } else if (model.status === 'paused') {
+                    terminateBtn.style.display = 'inline-block';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'inline-block';
                     deleteBtn.style.display = 'none';
                     continueBtn.style.display = 'none';
                 } else if (model.status === 'interrupted') {
                     // Show Continue button for interrupted jobs
                     terminateBtn.style.display = 'none';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'none';
                     deleteBtn.style.display = 'inline-block';
                     continueBtn.style.display = 'inline-block';
                 } else if (model.status === 'error' || model.status === 'complete' || model.status === 'terminated') {
                     terminateBtn.style.display = 'none';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'none';
                     deleteBtn.style.display = 'inline-block';
                     continueBtn.style.display = 'none';
                 } else {
                     terminateBtn.style.display = 'none';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'none';
                     deleteBtn.style.display = 'none';
                     continueBtn.style.display = 'none';
                 }
@@ -786,6 +808,38 @@
             }
         } catch (e) {
             alert('Failed to continue model');
+        }
+    }
+
+    async function pauseModel(modelId, modelName) {
+        if (!confirm(`Pause job for "${modelName}"?\n\nThe job will pause at the next safe checkpoint (e.g., between files or steps).`)) return;
+
+        try {
+            const res = await fetch(`/api/models/${modelId}/pause`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                alert(data.message || 'Pause signal sent.');
+                fetchStatus();
+            } else {
+                alert('Failed to pause: ' + (data.detail || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('Failed to pause model');
+        }
+    }
+
+    async function resumeModel(modelId, modelName) {
+        try {
+            const res = await fetch(`/api/models/${modelId}/resume`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                // alert(data.message || 'Job resumed.'); // Optional alert, maybe too noisy
+                fetchStatus();
+            } else {
+                alert('Failed to resume: ' + (data.detail || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('Failed to resume model');
         }
     }
 
@@ -1397,7 +1451,7 @@
             if (model.status === 'error') badge.style.color = 'var(--error)';
             else if (model.status === 'complete') badge.style.color = 'var(--success)';
             else if (model.status === 'terminated') badge.style.color = '#ff8c00';
-            else if (model.status === 'interrupted') badge.style.color = '#fbbf24';
+            else if (model.status === 'interrupted' || model.status === 'paused') badge.style.color = '#fbbf24';
             else badge.style.color = '';
 
             existingCard.querySelector('.progress-bar-fill').style.width = `${model.progress}%`;
@@ -1426,26 +1480,44 @@
                 const deleteBtn = existingCard.querySelector('.delete-btn');
                 const terminateBtn = existingCard.querySelector('.terminate-btn');
                 const continueBtn = existingCard.querySelector('.continue-btn');
+                const pauseBtn = existingCard.querySelector('.pause-btn');
+                const resumeBtn = existingCard.querySelector('.resume-btn');
 
                 deleteBtn.onclick = () => deleteModel(model.id, model.hf_repo_id);
                 terminateBtn.onclick = () => terminateModel(model.id, model.hf_repo_id);
                 continueBtn.onclick = () => continueModel(model.id, model.hf_repo_id);
+                pauseBtn.onclick = () => pauseModel(model.id, model.hf_repo_id);
+                resumeBtn.onclick = () => resumeModel(model.id, model.hf_repo_id);
 
-                const runningStatuses = ['pending', 'initializing', 'downloading', 'converting', 'quantizing', 'uploading'];
+                const runningStatuses = ['pending', 'initializing', 'downloading', 'converting', 'quantizing', 'uploading', 'resuming'];
                 if (runningStatuses.includes(model.status)) {
                     terminateBtn.style.display = 'inline-block';
+                    pauseBtn.style.display = 'inline-block';
+                    resumeBtn.style.display = 'none';
+                    deleteBtn.style.display = 'none';
+                    continueBtn.style.display = 'none';
+                } else if (model.status === 'paused') {
+                    terminateBtn.style.display = 'inline-block';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'inline-block';
                     deleteBtn.style.display = 'none';
                     continueBtn.style.display = 'none';
                 } else if (model.status === 'interrupted') {
                     terminateBtn.style.display = 'none';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'none';
                     deleteBtn.style.display = 'inline-block';
                     continueBtn.style.display = 'inline-block';
                 } else if (['error', 'complete', 'terminated'].includes(model.status)) {
                     terminateBtn.style.display = 'none';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'none';
                     deleteBtn.style.display = 'inline-block';
                     continueBtn.style.display = 'none';
                 } else {
                     terminateBtn.style.display = 'none';
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'none';
                     deleteBtn.style.display = 'none';
                     continueBtn.style.display = 'none';
                 }
