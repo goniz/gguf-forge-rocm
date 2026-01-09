@@ -18,7 +18,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 from huggingface_hub import HfApi, snapshot_download, create_repo, hf_hub_download
-from huggingface_hub.utils import tqdm as hf_tqdm
+from tqdm import tqdm
 
 from database import get_db_connection
 from managers import LlamaCppManager, get_app_version
@@ -32,6 +32,9 @@ PARALLEL_QUANT_JOBS = None
 
 # Global registry for running workflows (for termination support)
 running_workflows: dict = {}  # model_id -> ModelWorkflow instance
+
+# Thread pool for blocking operations
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 def set_workflow_config(
@@ -237,6 +240,8 @@ class ModelWorkflow:
         size: str = "",
         speed: str = "",
         transfer_type: str = "download",
+        downloaded_gb: float = 0,
+        total_gb: float = 0,
     ):
         """Update and broadcast transfer progress for a file."""
         self.transfer_files[filename] = {
@@ -244,6 +249,8 @@ class ModelWorkflow:
             "progress": progress,
             "size": size,
             "speed": speed,
+            "downloaded_gb": downloaded_gb,
+            "total_gb": total_gb,
         }
 
         # Broadcast the current transfer state
@@ -260,7 +267,7 @@ class ModelWorkflow:
         total, used, free = await loop.run_in_executor(
             None, shutil.disk_usage, CACHE_DIR
         )
-        free_gb = free / (2**30)
+        free_gb = free / (1024**3)
         await self.log(
             f"  Disk space check: Need {required_gb:.1f}GB, Available {free_gb:.1f}GB"
         )
@@ -288,7 +295,7 @@ class ModelWorkflow:
                     if hasattr(sibling, "size") and sibling.size:
                         total_bytes += sibling.size
 
-            size_gb = total_bytes / (2**30)
+            size_gb = total_bytes / (1024**3)
             return size_gb
         except Exception as e:
             await self.log(f"  ⚠ Could not fetch model size: {e}")
@@ -469,6 +476,12 @@ class ModelWorkflow:
 
                     await self.log(f"  Found {len(download_files)} files to download")
 
+                    # Get file metadata once before loop (for sizes)
+                    file_info = await loop.run_in_executor(
+                        _executor,
+                        lambda: api.model_info(self.hf_repo_id, files_metadata=True),
+                    )
+
                     # Download files with progress tracking
                     local_dir = CACHE_DIR / self.hf_repo_id
                     local_dir.mkdir(parents=True, exist_ok=True)
@@ -481,30 +494,109 @@ class ModelWorkflow:
                             filename.split("/")[-1] if "/" in filename else filename
                         )
 
+                        # Get file size from metadata
+                        total_gb = 0
+                        total_bytes = 0
+                        try:
+                            if file_info.siblings:
+                                for sibling in file_info.siblings:
+                                    if (
+                                        hasattr(sibling, "rfilename")
+                                        and sibling.rfilename == filename
+                                    ):
+                                        if hasattr(sibling, "size") and sibling.size:
+                                            total_bytes = sibling.size
+                                            total_gb = total_bytes / (1024**3)
+                                            break
+                        except Exception as e:
+                            await self.log(
+                                f"  ⚠ Could not get file size for {short_name}: {e}"
+                            )
+
                         # Initialize progress for this file
                         await self.update_transfer_progress(
-                            short_name, 0, "", "Starting...", "download"
+                            short_name,
+                            0,
+                            f"{total_gb:.2f}GB",
+                            "Starting...",
+                            "download",
+                            0,
+                            total_gb,
                         )
 
-                        # Download file in thread pool
+                        # Download file with progress polling
+                        local_path = local_dir / filename
+
+                        # Run download in thread pool
+                        download_future = loop.run_in_executor(
+                            _executor,
+                            lambda f=filename, ld=local_dir: hf_hub_download(
+                                repo_id=self.hf_repo_id,
+                                filename=f,
+                                local_dir=ld,
+                                local_dir_use_symlinks=False,
+                            ),
+                        )
+
+                        # Poll file size for progress updates
+                        last_update = 0
                         try:
-                            await loop.run_in_executor(
-                                None,
-                                lambda f=filename: hf_hub_download(
-                                    repo_id=self.hf_repo_id,
-                                    filename=f,
-                                    local_dir=local_dir,
-                                    local_dir_use_symlinks=False,
-                                ),
-                            )
-                            # Mark as complete
-                            await self.update_transfer_progress(
-                                short_name, 100, "", "Complete", "download"
-                            )
+                            while not download_future.done():
+                                await asyncio.sleep(0.5)
+
+                                # Check if file exists and get current size
+                                if local_path.exists():
+                                    current_bytes = local_path.stat().st_size
+                                    downloaded_gb = current_bytes / (1024**3)
+
+                                    # Calculate progress percentage
+                                    if total_bytes > 0:
+                                        progress_pct = int(
+                                            (current_bytes / total_bytes) * 100
+                                        )
+                                    else:
+                                        progress_pct = 0
+
+                                    # Update progress every 0.5 seconds
+                                    current_time = asyncio.get_event_loop().time()
+                                    if (
+                                        current_time - last_update >= 0.5
+                                        and progress_pct > 0
+                                    ):
+                                        await self.update_transfer_progress(
+                                            short_name,
+                                            progress_pct,
+                                            f"{total_gb:.2f}GB",
+                                            f"{downloaded_gb:.2f}GB / {total_gb:.2f}GB",
+                                            "download",
+                                            downloaded_gb,
+                                            total_gb,
+                                        )
+                                        last_update = current_time
+
+                                # Check for termination
+                                self.check_terminated()
+
+                            # Wait for download to complete
+                            await download_future
+
+                            # Final progress update
+                            if local_path.exists():
+                                final_bytes = local_path.stat().st_size
+                                final_gb = final_bytes / (1024**3)
+                                await self.update_transfer_progress(
+                                    short_name,
+                                    100,
+                                    f"{total_gb:.2f}GB",
+                                    "Complete",
+                                    "download",
+                                    final_gb,
+                                    total_gb,
+                                )
                         except Exception as e:
                             await self.log(f"  ⚠ Failed to download {short_name}: {e}")
                             await self.update_transfer_progress(
-                                short_name, -1, "", "Failed", "download"
+                                short_name, -1, "", "Failed", "download", 0, total_gb
                             )
                             raise Exception(f"Failed to download {short_name}")
 
@@ -742,6 +834,7 @@ class ModelWorkflow:
 
                         try:
                             loop = asyncio.get_event_loop()
+                            upload_start = time.time()
                             await loop.run_in_executor(
                                 None,
                                 lambda: self.api.upload_file(
@@ -751,11 +844,14 @@ class ModelWorkflow:
                                     repo_type="model",
                                 ),
                             )
+                            upload_duration = time.time() - upload_start
 
                             await self.update_transfer_progress(
                                 filename, 100, size_str, "Complete", "upload"
                             )
-                            await self.log(f"      ✓ Uploaded to HuggingFace")
+                            await self.log(
+                                f"      ✓ Uploaded to HuggingFace ({self.format_duration(upload_duration)})"
+                            )
                             uploaded_files.append(q_type)
 
                             # Save progress to DB for resume capability
