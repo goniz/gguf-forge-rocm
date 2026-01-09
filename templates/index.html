@@ -2003,14 +2003,40 @@
             // Truncate filename if too long
             const shortName = file.name.length > 30 ? file.name.substring(0, 27) + '...' : file.name;
 
+            // Display size information
+            let sizeText = '';
+            if (file.downloaded_gb !== undefined && file.total_gb !== undefined) {
+                if (file.progress === 100) {
+                    sizeText = `${file.total_gb.toFixed(2)} GB`;
+                } else if (file.total_gb > 0) {
+                    sizeText = `${file.downloaded_gb.toFixed(2)} / ${file.total_gb.toFixed(2)} GB`;
+                } else {
+                    sizeText = file.size || '';
+                }
+            } else {
+                sizeText = file.size || '';
+            }
+
+            // Display speed or percentage
+            let statusText = '';
+            if (file.progress === 100) {
+                statusText = '100%';
+            } else if (file.progress === -1) {
+                statusText = 'Failed';
+            } else if (file.speed) {
+                statusText = file.speed;
+            } else if (file.progress > 0) {
+                statusText = `${file.progress}%`;
+            }
+
             fileEl.innerHTML = `
                 <span style="color: ${statusColor}; width: 14px; text-align: center;">${statusIcon}</span>
                 <span style="flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${file.name}">${shortName}</span>
-                <span style="color: var(--text-secondary); min-width: 50px; text-align: right; font-size: 0.65rem;">${file.size || ''}</span>
-                <div style="width: 80px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
+                <span style="color: var(--text-secondary); min-width: 80px; text-align: right; font-size: 0.65rem;">${sizeText}</span>
+                <div style="width: 60px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
                     <div style="height: 100%; width: ${Math.max(0, file.progress)}%; background: ${barColor}; transition: width 0.3s ease;${file.progress > 0 && file.progress < 100 ? ' animation: pulse 1.5s ease-in-out infinite;' : ''}"></div>
                 </div>
-                <span style="color: ${statusColor}; min-width: 65px; text-align: right; font-size: 0.65rem;">${file.speed || ''}</span>
+                <span style="color: ${statusColor}; min-width: 60px; text-align: right; font-size: 0.65rem;">${statusText}</span>
             `;
             filesContainer.appendChild(fileEl);
         });

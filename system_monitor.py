@@ -125,9 +125,10 @@ def _get_default_network_interface() -> Optional[str]:
 
         if result.returncode == 0:
             output = result.stdout.strip()
-            for part in output.split():
-                if part.startswith("dev"):
-                    _default_interface = part.split()[1]
+            parts = output.split()
+            for i, part in enumerate(parts):
+                if part == "dev" and i + 1 < len(parts):
+                    _default_interface = parts[i + 1]
                     return _default_interface
     except (FileNotFoundError, subprocess.TimeoutExpired, IndexError):
         pass
