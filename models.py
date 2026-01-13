@@ -1,6 +1,7 @@
 """
 Pydantic models for API requests/responses.
 """
+
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -12,17 +13,22 @@ class LoginRequest(BaseModel):
 
 class ProcessRequest(BaseModel):
     model_id: str
-    quants: Optional[List[str]] = None  # If None, uses all quants
+    quants: Optional[List[str]] = None
 
 
 class ModelRequestSubmit(BaseModel):
     hf_repo_id: str
-    requested_quants: Optional[List[str]] = None  # e.g., ["Q4_K_M", "Q8_0"] - None means all quants
+    requested_quants: Optional[List[str]] = (
+        None  # e.g., ["Q4_K_M", "Q8_0"] - None means all quants
+    )
 
 
 class ApproveRequestBody(BaseModel):
     """Admin can optionally modify quant selection when approving."""
-    approved_quants: Optional[List[str]] = None  # If None, uses requested_quants or all quants
+
+    approved_quants: Optional[List[str]] = (
+        None  # If None, uses requested_quants or all quants
+    )
 
 
 class RejectRequest(BaseModel):

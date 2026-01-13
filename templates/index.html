@@ -394,7 +394,8 @@
             <input type="text" id="modelSearch" placeholder="Search HuggingFace models..." autocomplete="off"
                 style="flex-grow: 1; border: none; background: transparent; padding: 1rem; font-size: 1rem; color: var(--text-primary); outline: none;">
             {% if role == 'admin' %}
-            <button class="primary" onclick="convertModel()" style="margin: 0.5rem;">Start</button>
+            <button class="primary" onclick="convertModel()" style="margin: 0.5rem; white-space: nowrap;">Start Now</button>
+            <button class="secondary" onclick="requestModel()" style="margin: 0.5rem; background: transparent; border: 1px solid var(--text-primary); color: var(--text-primary); cursor: pointer; white-space: nowrap;">Submit Request</button>
             {% else %}
             <button class="primary" onclick="requestModel()" style="margin: 0.5rem;">Request</button>
             {% endif %}
@@ -406,10 +407,16 @@
         {% if role == 'admin' %}
         <div style="margin-top: 1rem;">
             <label
-                style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: 0.85rem;">
+                style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.5rem;">
                 <input type="checkbox" id="validationCheck" checked style="accent-color: var(--text-primary);">
                 Validate disk space
             </label>
+            <details style="color: var(--text-secondary); font-size: 0.85rem;">
+                <summary style="cursor: pointer; margin-bottom: 0.5rem; user-select: none;">Select Quants (Default: All)</summary>
+                <div id="quants-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 0.5rem; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 4px;">
+                    Loading...
+                </div>
+            </details>
         </div>
         {% endif %}
         
@@ -905,6 +912,47 @@
         }
     }
 
+    async function fetchQuants() {
+        if (!isAdmin) return;
+        const container = document.getElementById('quants-container');
+        if (!container) return;
+
+        try {
+            const res = await fetch('/api/quants');
+            const data = await res.json();
+            
+            container.innerHTML = '';
+            data.quants.forEach(q => {
+                const label = document.createElement('label');
+                label.style.display = 'flex';
+                label.style.alignItems = 'center';
+                label.style.gap = '0.25rem';
+                label.style.cursor = 'pointer';
+                label.title = data.descriptions[q] || '';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = q;
+                checkbox.className = 'quant-checkbox';
+                checkbox.style.accentColor = 'var(--text-primary)';
+                
+                label.appendChild(checkbox);
+                
+                const span = document.createElement('span');
+                span.textContent = q;
+                span.style.fontSize = '0.75rem';
+                label.appendChild(span);
+                
+                container.appendChild(label);
+            });
+        } catch (e) {
+            console.error('Failed to fetch quants', e);
+            container.innerHTML = 'Failed to load quants';
+        }
+    }
+    
+    if (isAdmin) fetchQuants();
+
     async function convertModel() {
         const modelId = searchInput.value;
         if (!modelId) return;
@@ -913,6 +961,11 @@
         const selectedQuants = getSelectedQuants();
         
         try {
+            const body = { model_id: modelId };
+            if (selectedQuants) {
+                body.quants = selectedQuants;
+            }
+
             const res = await fetch('/api/models/process', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -937,7 +990,6 @@
             alert('Failed to start process');
         }
     }
-
     async function requestModel() {
         const modelId = searchInput.value;
         if (!modelId) return;
@@ -946,6 +998,11 @@
         const selectedQuants = getSelectedQuants();
         
         try {
+            const body = { hf_repo_id: modelId };
+            if (selectedQuants) {
+                body.requested_quants = selectedQuants;
+            }
+
             const res = await fetch('/api/requests/submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -965,8 +1022,6 @@
             alert('Failed to submit request');
         }
     }
-
-    // Consolidated initial data fetch (single request instead of 4)
     async function fetchDashboardInit() {
         try {
             const res = await fetch('/api/dashboard/init');

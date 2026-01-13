@@ -1,6 +1,7 @@
 """
 Model conversion routes for GGUF Forge.
 """
+
 import os
 import uuid
 import json
@@ -49,16 +50,23 @@ def validate_quants(quants: list) -> list:
 
 
 @router.post("/models/process")
-async def process_model(req: ProcessRequest, background_tasks: BackgroundTasks, user = Depends(get_admin)):
+async def process_model(
+    req: ProcessRequest, background_tasks: BackgroundTasks, user=Depends(get_admin)
+):
     conn = await get_db_connection()
     await conn.execute("SELECT * FROM models WHERE hf_repo_id = ?", (req.model_id,))
     existing = await conn.fetchone()
-    
-    if existing and existing['status'] in ['pending', 'downloading', 'converting', 'quantizing', 'initializing']:
-         await conn.close()
-         raise HTTPException(status_code=400, detail="Model already processing")
-    
-    # Validate and process quants
+
+    if existing and existing["status"] in [
+        "pending",
+        "downloading",
+        "converting",
+        "quantizing",
+        "initializing",
+    ]:
+        await conn.close()
+        raise HTTPException(status_code=400, detail="Model already processing")
+
     available_quants = get_quants_list()
     if req.quants:
         quants_to_run = validate_quants(req.quants)
@@ -67,25 +75,29 @@ async def process_model(req: ProcessRequest, background_tasks: BackgroundTasks, 
             raise HTTPException(status_code=400, detail="No valid quants specified")
     else:
         quants_to_run = available_quants
-    
+
     new_id = str(uuid.uuid4())
-    
+
     # Delete existing record first (if any) for MSSQL compatibility
     # This replaces "INSERT OR REPLACE" which is SQLite-specific
     if existing:
         await conn.execute("DELETE FROM models WHERE hf_repo_id = ?", (req.model_id,))
-    
-    quants_msg = ', '.join(quants_to_run) if len(quants_to_run) < len(available_quants) else 'all quants'
+
+    quants_msg = (
+        ", ".join(quants_to_run)
+        if len(quants_to_run) < len(available_quants)
+        else "all quants"
+    )
     await conn.execute(
         "INSERT INTO models (id, hf_repo_id, status, progress, log, error_details) VALUES (?, ?, ?, ?, ?, ?)",
-        (new_id, req.model_id, "pending", 0, f"Queued... Quants: {quants_msg}", "")
+        (new_id, req.model_id, "pending", 0, f"Queued... Quants: {quants_msg}", ""),
     )
     await conn.commit()
     await conn.close()
-    
+
     workflow = ModelWorkflow(new_id, req.model_id, quants_to_run=quants_to_run)
     background_tasks.add_task(workflow.run_pipeline)
-    
+
     return {"status": "started", "id": new_id, "quants": quants_to_run}
 
 
@@ -110,7 +122,7 @@ async def get_model_status(model_id: str):
 
 
 @router.delete("/models/{model_id}")
-async def delete_model_record(model_id: str, user = Depends(get_admin)):
+async def delete_model_record(model_id: str, user=Depends(get_admin)):
     """Admin only: Delete a model record from the database."""
     conn = await get_db_connection()
     await conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
@@ -120,7 +132,7 @@ async def delete_model_record(model_id: str, user = Depends(get_admin)):
 
 
 @router.post("/models/{model_id}/terminate")
-async def terminate_model(model_id: str, user = Depends(get_admin)):
+async def terminate_model(model_id: str, user=Depends(get_admin)):
     """Admin only: Terminate a running job."""
     # Check if this workflow is currently running
     if model_id not in running_workflows:
@@ -129,118 +141,141 @@ async def terminate_model(model_id: str, user = Depends(get_admin)):
         await conn.execute("SELECT * FROM models WHERE id = ?", (model_id,))
         model = await conn.fetchone()
         await conn.close()
-        
+
         if not model:
             raise HTTPException(status_code=404, detail="Job not found")
-        if model['status'] in ['complete', 'error', 'terminated', 'interrupted']:
-            raise HTTPException(status_code=400, detail=f"Job already finished with status: {model['status']}")
-        
+        if model["status"] in ["complete", "error", "terminated", "interrupted"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job already finished with status: {model['status']}",
+            )
+
         # Job exists but not in running_workflows - mark as terminated directly
         conn = await get_db_connection()
         await conn.execute(
             "UPDATE models SET status = ?, error_details = ? WHERE id = ?",
-            ("terminated", "Terminated by administrator (job was not actively running)", model_id)
+            (
+                "terminated",
+                "Terminated by administrator (job was not actively running)",
+                model_id,
+            ),
         )
         await conn.commit()
         await conn.close()
         return {"status": "terminated", "message": "Job marked as terminated"}
-    
+
     # Terminate the running workflow
     workflow = running_workflows[model_id]
-    
+
     # If paused, we need to resume it briefly so it can terminate
     if workflow.paused:
         await workflow.resume()
-        
+
     await workflow.terminate()
-    
-    return {"status": "terminating", "message": "Termination signal sent. Job will stop shortly."}
+
+    return {
+        "status": "terminating",
+        "message": "Termination signal sent. Job will stop shortly.",
+    }
 
 
 @router.post("/models/{model_id}/pause")
-async def pause_model(model_id: str, user = Depends(get_admin)):
+async def pause_model(model_id: str, user=Depends(get_admin)):
     """Admin only: Pause a running job."""
     if model_id not in running_workflows:
         raise HTTPException(status_code=404, detail="Job not found or not running")
-    
+
     workflow = running_workflows[model_id]
     await workflow.pause()
-    
-    return {"status": "pausing", "message": "Pause signal sent. Job will pause at next checkpoint."}
+
+    return {
+        "status": "pausing",
+        "message": "Pause signal sent. Job will pause at next checkpoint.",
+    }
 
 
 @router.post("/models/{model_id}/resume")
-async def resume_model(model_id: str, user = Depends(get_admin)):
+async def resume_model(model_id: str, user=Depends(get_admin)):
     """Admin only: Resume a paused job."""
     if model_id not in running_workflows:
-        raise HTTPException(status_code=404, detail="Job not found in memory (try 'continue' if server restarted)")
-    
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found in memory (try 'continue' if server restarted)",
+        )
+
     workflow = running_workflows[model_id]
     if not workflow.paused:
         raise HTTPException(status_code=400, detail="Job is not paused")
-        
+
     await workflow.resume()
-    
+
     return {"status": "resumed", "message": "Resume signal sent. Job continuing..."}
 
 
 @router.post("/models/{model_id}/continue")
-async def continue_model(model_id: str, background_tasks: BackgroundTasks, user = Depends(get_admin)):
+async def continue_model(
+    model_id: str, background_tasks: BackgroundTasks, user=Depends(get_admin)
+):
     """Admin only: Continue an interrupted job."""
     conn = await get_db_connection()
     await conn.execute("SELECT * FROM models WHERE id = ?", (model_id,))
     model = await conn.fetchone()
-    
+
     if not model:
         await conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Only allow continuing interrupted jobs
-    if model['status'] != 'interrupted':
+    if model["status"] != "interrupted":
         await conn.close()
-        raise HTTPException(status_code=400, detail=f"Can only continue interrupted jobs. Current status: {model['status']}")
-    
+        raise HTTPException(
+            status_code=400,
+            detail=f"Can only continue interrupted jobs. Current status: {model['status']}",
+        )
+
     # Check if job is already running
     if model_id in running_workflows:
         await conn.close()
         raise HTTPException(status_code=400, detail="Job is already running")
-    
+
     # Get the list of completed quants
     completed_quants = []
-    if model.get('completed_quants'):
+    if model.get("completed_quants"):
         try:
-            completed_quants = json.loads(model['completed_quants'])
+            completed_quants = json.loads(model["completed_quants"])
         except (json.JSONDecodeError, TypeError):
             completed_quants = []
-    
+
     # Calculate remaining quants
     all_quants = get_quants_list()
     remaining_quants = [q for q in all_quants if q not in completed_quants]
-    
+
     if not remaining_quants:
         await conn.close()
-        raise HTTPException(status_code=400, detail="All quants already completed for this job")
-    
+        raise HTTPException(
+            status_code=400, detail="All quants already completed for this job"
+        )
+
     # Reset status and clear error
     await conn.execute(
         "UPDATE models SET status = ?, error_details = ?, log = ? WHERE id = ?",
-        ("pending", "", model['log'] + "\n\n━━━ RESUMING JOB ━━━\n", model_id)
+        ("pending", "", model["log"] + "\n\n━━━ RESUMING JOB ━━━\n", model_id),
     )
     await conn.commit()
     await conn.close()
-    
+
     # Start the workflow in resume mode
     workflow = ModelWorkflow(
-        model_id, 
-        model['hf_repo_id'], 
+        model_id,
+        model["hf_repo_id"],
         resume_mode=True,
-        completed_quants=completed_quants
+        completed_quants=completed_quants,
     )
     background_tasks.add_task(workflow.run_pipeline)
-    
+
     return {
-        "status": "continued", 
+        "status": "continued",
         "message": f"Job resumed. {len(completed_quants)} quants already done, {len(remaining_quants)} remaining.",
         "completed": completed_quants,
-        "remaining": remaining_quants
+        "remaining": remaining_quants,
     }
